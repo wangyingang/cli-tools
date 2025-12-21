@@ -1,0 +1,15 @@
+[project]
+name = "video-ocr-tool"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "opencv-python>=4.12.0.88",
+    "rapidocr-onnxruntime>=1.4.4",
+    "tqdm>=4.67.1",
+]
+
+[project.scripts]
+# "命令名称" = "文件名:函数名"
+video-ocr = "main:main"
