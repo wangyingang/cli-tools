@@ -1,7 +1,7 @@
 [project]
-name = "video-ocr-tool"
+name = "subtitle-extractor"
 version = "0.1.0"
-description = "Add your description here"
+description = "A high-performance tool to extract hardcoded subtitles from videos using OCR and multiprocessing."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -11,5 +11,5 @@ dependencies = [
 ]
 
 [project.scripts]
-# "命令名称" = "文件名:函数名"
-video-ocr = "main:main"
+# 这里定义了全局调用的命令名称
+subtitle-extractor = "main:main"
