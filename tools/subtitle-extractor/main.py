@@ -12,126 +12,160 @@ from rapidocr_onnxruntime import RapidOCR
 
 # ================= 核心工作类 =================
 class SegmentWorker:
-    def __init__(self, video_path, crop_ratio=0.2, frame_skip=10):
+    def __init__(self, video_path, crop_ratio=0.2, frame_skip=15):
         self.video_path = video_path
         self.crop_ratio = crop_ratio
         self.frame_skip = frame_skip
 
+    def _preprocess_frame(self, frame):
+        """统一的图像预处理"""
+        if frame is None: return None
+        h, w = frame.shape[:2]
+        crop_h = int(h * self.crop_ratio)
+        cropped = frame[h - crop_h:h, 0:w]
+        
+        target_width = 960
+        scale = target_width / w
+        new_h = int(crop_h * scale)
+        cropped = cv2.resize(cropped, (target_width, new_h))
+        gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
+        # 适度模糊以减少噪点对差分的影响
+        gray = cv2.GaussianBlur(gray, (5, 5), 0)
+        return gray
+
     def _is_image_similar(self, img1, img2):
+        """判断两帧图像是否相似（用于快速跳过OCR）"""
         if img1 is None or img2 is None: return False
         if img1.shape != img2.shape: return False
         
-        # === 核心优化：二值化处理 ===
-        # 1. 计算两张图的绝对差值
         diff_img = cv2.absdiff(img1, img2)
-        
-        # 2. 只有变化剧烈的像素才会被关注
-        # 字幕出现/消失通常会产生极大的像素亮度变化 (0 -> 255)
-        # 背景微动通常变化较小 (例如 50 -> 60)
-        # 我们设定阈值 30，忽略掉所有微小的背景变化和噪点
         _, diff_thresh = cv2.threshold(diff_img, 30, 255, cv2.THRESH_BINARY)
-        
-        # 3. 计算有多少个像素发生了剧烈变化
-        # countNonZero 极快
         non_zero_count = cv2.countNonZero(diff_thresh)
-        
-        # 4. 判断比例
-        # 如果剧烈变化的像素占比低于 1% (0.01)，则认为画面(字幕)没变
         total_pixels = img1.shape[0] * img1.shape[1]
         change_ratio = non_zero_count / total_pixels
         
         return change_ratio < 0.01
 
     def _is_text_similar(self, str1, str2):
-        if not str1 or not str2: return False
+        if not str1: str1 = ""
+        if not str2: str2 = ""
+        str1 = str1.replace(" ", "")
+        str2 = str2.replace(" ", "")
+        if str1 == str2: return True
         return SequenceMatcher(None, str1, str2).ratio() > 0.85
 
-    # 新增 queue 参数用于汇报进度
     def process_segment(self, start_frame, end_frame, queue):
         ocr_engine = RapidOCR()
         cap = cv2.VideoCapture(str(self.video_path))
-        
-        # 跳转到分段起始点
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
         
         subtitles = []
         current_sub = None
+        
         last_img = None
+        last_text = ""
+        
+        # 记录"上一次"处理的时间，用于反向补偿
+        # 初始值设为当前位置，避免第一句字幕时间倒流太远
+        current_time = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+        last_processed_time = current_time 
         
         current_frame_idx = start_frame
         
         while current_frame_idx < end_frame:
-            # 物理跳帧：grab
+            # --- 1. 物理跳帧 (保持最高性能) ---
             frames_skipped = 0
-            for _ in range(self.frame_skip - 1):
-                if current_frame_idx >= end_frame: break
-                cap.grab()
-                current_frame_idx += 1
-                frames_skipped += 1
+            if last_img is not None:
+                for _ in range(self.frame_skip - 1):
+                    if current_frame_idx >= end_frame - 1: break
+                    cap.grab() # 仅抓取不解码，极快
+                    current_frame_idx += 1
+                    frames_skipped += 1
             
-            if current_frame_idx >= end_frame: 
-                # 汇报跳过的帧数
-                if queue: queue.put(frames_skipped)
-                break
-
+            # --- 2. 读取当前帧 ---
             ret, frame = cap.read()
-            current_frame_idx += 1
+            if not ret: break
             
-            # 汇报进度 (跳过的 + 刚才 read 的这1帧)
+            # 获取当前帧的准确时间
+            current_time = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+            
+            # 进度汇报
             if queue: queue.put(frames_skipped + 1)
 
-            if not ret: break
-
-            current_time = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
-
-            # --- 图像处理 ---
-            h, w = frame.shape[:2]
-            crop_h = int(h * self.crop_ratio)
-            cropped = frame[h - crop_h:h, 0:w]
+            gray = self._preprocess_frame(frame)
             
-            target_width = 960
-            scale = target_width / w
-            new_h = int(crop_h * scale)
-            cropped = cv2.resize(cropped, (target_width, new_h))
-            gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
-            gray = cv2.GaussianBlur(gray, (5, 5), 0)
+            # --- 3. 变化检测与时间轴补偿逻辑 ---
+            
+            # 计算这一跳的时间间隔 (例如 0.5s)
+            time_gap = current_time - last_processed_time
+            
+            # A. 视觉查重：如果画面没变，直接认为字幕没变，跳过OCR
+            is_visually_similar = False
+            if last_img is not None:
+                is_visually_similar = self._is_image_similar(last_img, gray)
 
-            # --- 视觉查重 & OCR ---
-            if last_img is not None and self._is_image_similar(last_img, gray):
-                if current_sub:
-                    current_sub["end"] = current_time
+            curr_text = ""
+            if is_visually_similar:
+                curr_text = last_text
             else:
-                last_img = gray
+                # 画面变了，做 OCR
                 result, _ = ocr_engine(gray)
-                
-                txt = ""
                 if result:
                     texts = [line[1] for line in result if line[2] > 0.6]
-                    txt = " ".join(texts).strip()
+                    curr_text = " ".join(texts).strip()
+
+            # B. 文本比对与时间补偿
+            if self._is_text_similar(last_text, curr_text):
+                # === 情况1：字幕没变 ===
+                # 无论是画面没变还是OCR结果没变
+                if current_sub:
+                    # 将结束时间更新到当前瞬间
+                    # (随着循环继续，它会一直延伸，直到发现变了为止)
+                    current_sub["end"] = current_time
+            else:
+                # === 情况2：字幕变了 (出现、消失、或切换) ===
+                # 此时，真实的变化点发生在 [last_processed_time, current_time] 之间
                 
-                if not current_sub:
-                    if txt:
-                        current_sub = {"text": txt, "start": current_time, "end": current_time}
-                else:
-                    if txt:
-                        if self._is_text_similar(current_sub["text"], txt):
-                            current_sub["end"] = current_time
-                        else:
-                            if current_sub["end"] - current_sub["start"] > 0.2:
-                                subtitles.append(current_sub)
-                            current_sub = {"text": txt, "start": current_time, "end": current_time}
+                if current_sub:
+                    # 2.1 旧字幕 -> 新字幕 (切换) 或 旧字幕 -> 空 (消失)
+                    if curr_text:
+                        # [切换]: 取中间点，让两句话首尾相接
+                        split_point = last_processed_time + (time_gap / 2)
+                        
+                        current_sub["end"] = split_point
+                        subtitles.append(current_sub)
+                        
+                        # 新字幕从中间点开始
+                        current_sub = {"text": curr_text, "start": split_point, "end": current_time}
                     else:
-                        if current_sub["end"] - current_sub["start"] > 0.2:
-                            subtitles.append(current_sub)
+                        # [消失]: 延长旧字幕到当前时间 (晚消失)
+                        # 保证覆盖整个跳帧区间
+                        current_sub["end"] = current_time
+                        subtitles.append(current_sub)
                         current_sub = None
+                else:
+                    # 2.2 空 -> 新字幕 (出现)
+                    if curr_text:
+                        # [出现]: 从上一次检查的时间开始 (早出现)
+                        # 这样可以覆盖前面的盲区，确保不漏字
+                        # 注意：第一句不要变成负数
+                        start_t = max(0.0, last_processed_time)
+                        current_sub = {"text": curr_text, "start": start_t, "end": current_time}
+
+            # 更新状态
+            last_text = curr_text
+            last_img = gray
+            last_processed_time = current_time
+            current_frame_idx += 1
         
+        # 循环结束，保存最后一句
         if current_sub:
             subtitles.append(current_sub)
             
         cap.release()
         return subtitles
 
-# ================= 包装函数 =================
+# ================= 辅助与包装函数 =================
 def run_worker(args):
     video_path, start_frame, end_frame, idx, crop, skip, queue = args
     worker = SegmentWorker(video_path, crop, skip)
@@ -146,23 +180,19 @@ def format_time(seconds):
     millis = int(td.microseconds / 1000)
     return f"{hours:02}:{minutes:02}:{secs:02},{millis:03}"
 
-# ================= 监听线程 =================
 def listener_thread(queue, pbar):
     while True:
         try:
-            # 从队列获取增量，超时1秒防止死锁
             n = queue.get(timeout=1)
-            if n == "DONE":
-                break
+            if n == "DONE": break
             pbar.update(n)
         except:
-            if not pbar.disable: # 如果进度条还没关，继续
-                continue
+            if not pbar.disable: continue
             break
 
 # ================= 主程序 =================
 def main():
-    parser = argparse.ArgumentParser(description="多进程视频硬字幕提取 (带实时进度)")
+    parser = argparse.ArgumentParser(description="多进程视频硬字幕提取 (极速补偿版)")
     parser.add_argument("video_path")
     parser.add_argument("--processes", type=int, default=8)
     parser.add_argument("--skip", type=int, default=15)
@@ -171,56 +201,46 @@ def main():
 
     video_path = Path(args.video_path)
     if not video_path.exists():
-        print("文件不存在")
+        print("❌ 文件不存在")
         return
 
-    # 1. 获取视频信息
     cap = cv2.VideoCapture(str(video_path))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS)
     cap.release()
 
     print(f"🎬 视频: {video_path.name}")
-    print(f"📊 总帧数: {total_frames} | 并发进程: {args.processes}")
+    print(f"📊 帧数: {total_frames} | FPS: {fps:.2f}")
+    print(f"🚀 模式: 极速补偿 | {args.processes}进程 | 跳帧: {args.skip}")
+    print("⚡ 策略：利用时间补偿填充跳帧间隙，确保字幕不丢失、不闪退。")
 
-    # 2. 准备多进程通讯
-    # 使用 Manager 来管理跨进程 Queue
     manager = multiprocessing.Manager()
     queue = manager.Queue()
 
-    # 3. 切分任务
     segment_length = total_frames // args.processes
     tasks = []
     for i in range(args.processes):
         start = i * segment_length
         end = total_frames if i == args.processes - 1 else (i + 1) * segment_length
-        # 把 queue 传进去
         tasks.append((str(video_path), start, end, i+1, args.crop, args.skip, queue))
 
-    # 4. 启动进度条监听线程
-    # 使用 total_frames 作为总长度，这样精度就是“帧”
     pbar = tqdm(total=total_frames, unit="frame", mininterval=0.5)
     monitor = threading.Thread(target=listener_thread, args=(queue, pbar))
     monitor.start()
 
-    # 5. 并行执行
     results = []
     ctx = multiprocessing.get_context('spawn')
     
     with ctx.Pool(processes=args.processes) as pool:
-        # 这里不再包裹 tqdm，进度由 listener 线程负责
-        # imap 依然用于收集结果
         for res in pool.imap(run_worker, tasks):
             results.append(res)
     
-    # 任务全部完成，通知监听线程退出
     queue.put("DONE")
     monitor.join()
     pbar.close()
 
-    print("\n📦 正在合并字幕片段...")
+    print("\n📦 正在合并与去重...")
     
-    # 6. 合并结果
     final_subs = []
     all_subs_flat = []
     for chunk_subs in results:
@@ -230,13 +250,15 @@ def main():
         final_subs.append(all_subs_flat[0])
         for sub in all_subs_flat[1:]:
             last = final_subs[-1]
-            time_gap = sub['start'] - last['end']
-            if time_gap < 0.5 and SequenceMatcher(None, last['text'], sub['text']).ratio() > 0.85:
-                last['end'] = sub['end'] 
+            # 简单的文本去重
+            if SequenceMatcher(None, last['text'], sub['text']).ratio() > 0.85:
+                # 如果两句话内容一样，且时间接近（允许因为补偿逻辑产生的轻微重叠），则合并
+                # 这里的阈值设大一点，因为我们现在主动延长了时间
+                if sub['start'] - last['end'] < 1.0: 
+                    last['end'] = max(last['end'], sub['end'])
             else:
                 final_subs.append(sub)
 
-    # 7. 保存
     output_path = video_path.with_suffix(".srt")
     with open(output_path, 'w', encoding='utf-8') as f:
         for i, sub in enumerate(final_subs):
@@ -244,7 +266,7 @@ def main():
             f.write(f"{format_time(sub['start'])} --> {format_time(sub['end'])}\n")
             f.write(f"{sub['text']}\n\n")
             
-    print(f"✅ 完成！文件已保存: {output_path}")
+    print(f"✅ 完成！字幕文件: {output_path}")
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
