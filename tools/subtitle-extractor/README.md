@@ -36,18 +36,18 @@
    uv tool install --force .
    ```
 
-安装完成后，你可以在终端的任意位置直接使用 `subtitle-extractor` 命令。
+安装完成后，你可以在终端的任意位置直接使用 `subx` 命令。
 
 ### 使用方法
 
 **基本用法**
 ```bash
-subtitle-extractor /path/to/your/video.mp4
+subx /path/to/your/video.mp4
 ```
 运行结束后，程序会在视频同级目录下生成一个与视频同名的 .srt 字幕文件。
 
 **命令行参数**  
-你可以通过 `subtitle-extractor --help` 查看所有可用参数：  
+你可以通过 `subx --help` 查看所有可用参数：  
 
 | 参数          | 默认值  | 说明                                    |
 | ----------- | ---- | ------------------------------------- |
@@ -59,12 +59,12 @@ subtitle-extractor /path/to/your/video.mp4
 **示例**  
 1. 提取底部 20% 区域的字幕（默认）：
     ```bash
-    subtitle-extractor ./movies/sample.mp4
+    subx ./movies/sample.mp4
     ```
 
 2. 针对 16 核 CPU 优化，并截取底部 30% 的区域：
    ```bash
-   subtitle-extractor ./movies/sample.mp4 --processes 16 --crop 0.3
+   subx ./movies/sample.mp4 --processes 16 --crop 0.3
    ```
 
 ### 开发指南

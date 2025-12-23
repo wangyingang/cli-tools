@@ -192,7 +192,7 @@ def listener_thread(queue, pbar):
 
 # ================= 主程序 =================
 def main():
-    parser = argparse.ArgumentParser(description="多进程视频硬字幕提取 (极速补偿版)")
+    parser = argparse.ArgumentParser(description="多进程视频硬字幕提取", prog="subx")
     parser.add_argument("video_path")
     parser.add_argument("--processes", type=int, default=8)
     parser.add_argument("--skip", type=int, default=15)
@@ -211,8 +211,7 @@ def main():
 
     print(f"🎬 视频: {video_path.name}")
     print(f"📊 帧数: {total_frames} | FPS: {fps:.2f}")
-    print(f"🚀 模式: 极速补偿 | {args.processes}进程 | 跳帧: {args.skip}")
-    print("⚡ 策略：利用时间补偿填充跳帧间隙，确保字幕不丢失、不闪退。")
+    print(f"🚀 模式: {args.processes}进程 | 跳帧: {args.skip}")
 
     manager = multiprocessing.Manager()
     queue = manager.Queue()

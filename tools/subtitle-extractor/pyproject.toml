@@ -12,4 +12,4 @@ dependencies = [
 
 [project.scripts]
 # 这里定义了全局调用的命令名称
-subtitle-extractor = "main:main"
+subx = "main:main"
