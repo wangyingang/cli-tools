@@ -1,83 +1,93 @@
-# Subtitle Extractor (视频硬字幕提取器)
+# subtitle-extractor
 
-一个高性能的视频硬字幕提取工具，基于 RapidOCR 和 OpenCV 开发。它利用多进程并行处理和图像差分技术，快速从视频中提取硬字幕并生成 `.srt` 文件。
+`subx` 是一个面向硬字幕视频的命令行工具，当前面向最终用户只保留一个能力：从单个视频提取字幕并输出 `.srt`。
 
-## ✨ 特性
+仓库内另提供 `subx-dev`，只用于研发阶段的样本评估和性能基准，不属于最终用户主命令界面。
 
-- **⚡ 高性能**：利用多进程 (Multiprocessing) 并行处理视频片段，大幅提升提取速度。
-- **🧠 智能去重**：通过图像差分技术 (SSIM 简化版) 和文本相似度比对，自动过滤重复帧和微小变化的字幕。
-- **🎯 精准 OCR**：集成 RapidOCR (ONNX Runtime)，提供高精度的中文/英文识别。
-- **🛠 易于安装**：支持通过 `uv` 直接安装为系统全局工具。
+## 环境
 
-## 📦 安装
+- Python `3.12.x`
+- 推荐使用 `uv`
 
-本项目使用 [uv](https://github.com/astral-sh/uv) 进行依赖管理和打包。你可以直接将本项目安装为全局可用的命令行工具。
+安装依赖：
 
-### 前置要求
-- Python >= 3.13
-- [uv](https://docs.astral.sh/uv/getting-started/installation/)
-
-### 安装步骤
-
-1. **克隆仓库**
-   ```bash
-   git clone [https://github.com/wangyingang/subtitle-extractor.git](https://github.com/wangyingang/subtitle-extractor.git)
-   cd subtitle-extractor
-   ```
-
-2. 使用 uv 安装为全局工具 在项目根目录下运行：
-   ```bash
-   uv tool install .
-
-   # 在开发调试期，使用如下命令可保持命令随时更新:
-   uv tool install --editable .
-
-   # 或者，如果你后续更新了代码，可以使用以下命令强制重新安装：
-   uv tool install --force .
-   ```
-
-安装完成后，你可以在终端的任意位置直接使用 `subx` 命令。
-
-### 使用方法
-
-**基本用法**
 ```bash
-subx /path/to/your/video.mp4
+uv sync
 ```
-运行结束后，程序会在视频同级目录下生成一个与视频同名的 .srt 字幕文件。
 
-**命令行参数**  
-你可以通过 `subx --help` 查看所有可用参数：  
+安装命令行工具：
 
-| 参数          | 默认值  | 说明                                    |
-| ----------- | ---- | ------------------------------------- |
-| video_path  | (必填) | 视频文件的路径。                              |
-| --processes | 8    | 并行进程数。建议根据 CPU 核心数调整。                 |
-| --crop      | 0.2  | 字幕区域截取比例（从底部向上）。`0.2` 表示截取底部 20% 的画面。 |
-| --skip      | 15   | 采样跳帧数。数值越小识别越密，但速度越慢。                 |
+```bash
+uv tool install --editable .
+```
 
-**示例**  
-1. 提取底部 20% 区域的字幕（默认）：
-    ```bash
-    subx ./movies/sample.mp4
-    ```
+## CLI
 
-2. 针对 16 核 CPU 优化，并截取底部 30% 的区域：
-   ```bash
-   subx ./movies/sample.mp4 --processes 16 --crop 0.3
-   ```
+提取字幕：
 
-### 开发指南
+```bash
+subx ./video.mp4 --engine paddle --lang mixed
+```
 
-如果你想参与开发或调试：  
-1. 同步依赖
-   ```bash
-   uv sync
-   ```
-2. 运行代码
-   ```bash
-   uv run main.py ./test_video.mp4
-   ```
+使用 ONNX 候选后端：
 
-### License
-MIT License
+```bash
+subx ./video.mp4 --engine onnx --lang zh --roi 0.1,0.78,0.8,0.18
+```
+
+## 仓库内评估命令
+
+评估样本集：
+
+```bash
+subx-dev eval ./samples --engine paddle --json ./eval.json --report ./eval.md
+```
+
+如需做受控对比，再显式使用 `--engine all` 或 `--engine onnx`；当前推荐默认路径仍是 Paddle。
+
+性能基准：
+
+```bash
+subx-dev bench ./samples --engine paddle --json ./bench.json
+```
+
+## 样本格式
+
+每个样本目录使用以下结构：
+
+```text
+samples/<sample_id>/
+  clip.mp4
+  truth.srt
+  meta.json
+```
+
+`meta.json` 的最小格式：
+
+```json
+{
+  "lang": "mixed",
+  "tags": ["bilingual", "double-line", "bottom-centered"]
+}
+```
+
+可选加入：
+
+```json
+{
+  "lang": "zh",
+  "roi": [0.1, 0.78, 0.8, 0.18],
+  "tags": ["single-line", "light-text-dark-bg"]
+}
+```
+
+## 当前实现说明
+
+- 主默认后端是 PaddleOCR，目标模型配置是 `PP-OCRv5_server_det + PP-OCRv5_server_rec`
+- Paddle v5 模型通过 Hugging Face Hub 下载，并默认复用 `~/.cache/huggingface/hub` 下的 snapshot cache
+- ONNX 候选后端优先使用 [monkt/paddleocr-onnx](https://huggingface.co/monkt/paddleocr-onnx)
+- `subx` 只保留最终用户的提取入口；`subx-dev` 承接仓库内评估与基准命令
+- 当前样本基线已优先验证 Paddle；ONNX 仍是候选路线，因为现阶段在已测样本上没有表现出更好的速度或准确率
+- 当前已完成 Paddle 全样本基线；在已测英文样本上，ONNX 相比 Paddle 同时更慢且更差
+- 处理流水线是“顺序解码 + ROI 变化检测 + OCR 工作池”，不再按视频分段多进程重复解码
+- 纯函数测试位于 `tests/`，不依赖真实 OCR 模型

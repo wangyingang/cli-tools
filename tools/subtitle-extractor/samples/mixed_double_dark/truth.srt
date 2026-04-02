@@ -1,0 +1,14 @@
+1
+00:00:00,200 --> 00:00:05,800
+中文与 English 放在一起
+to simulate bilingual subtitles
+
+2
+00:00:06,200 --> 00:00:11,800
+第二条保持双行且底部居中
+with a narrow visual footprint
+
+3
+00:00:12,200 --> 00:00:17,800
+亮字配深底，边缘略带描边
+for a stable OCR baseline

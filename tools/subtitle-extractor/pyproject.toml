@@ -1,15 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "subtitle-extractor"
-version = "0.1.0"
-description = "A high-performance tool to extract hardcoded subtitles from videos using OCR and multiprocessing."
+version = "0.2.0"
+description = "Hard subtitle extraction CLI with repository-only evaluation tools."
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.12,<3.13"
 dependencies = [
+    "huggingface_hub>=0.30.0",
+    "numpy>=1.26.0",
     "opencv-python>=4.12.0.88",
+    "paddleocr>=3.0.0",
+    "paddlepaddle>=3.0.0",
     "rapidocr-onnxruntime>=1.4.4",
     "tqdm>=4.67.1",
 ]
 
 [project.scripts]
-# 这里定义了全局调用的命令名称
-subx = "main:main"
+subx = "subx.cli:main"
+subx-dev = "subx.dev_cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
