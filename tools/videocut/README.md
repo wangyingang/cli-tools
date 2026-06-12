@@ -48,15 +48,15 @@ avcut ./movie.mp4 -b 00:01:30 -e 00:03:00 --encode
 ```
 
 By default, output files are written beside the input and named from the actual
-aligned duration. A four-second clip is named:
+aligned begin and end timestamps:
 
 ```text
-movie.cut-00:00:04.mp4
-movie.cut-00:00:04.srt
+movie.cut-00.59.58.023-01.06.04.mp4
+movie.cut-00.59.58.023-01.06.04.srt
 ```
 
-Non-whole-second durations include milliseconds, for example
-`movie.cut-00:00:04.125.mp4`.
+Each timestamp uses `hh.mm.ss` or `hh.mm.ss.SSS` when milliseconds exist. When
+`--end` is omitted, the end component uses the input video EOF timestamp.
 
 When a subtitle is processed, its output is placed beside the output video with
 the same stem and the original subtitle extension. Use `-o/--out` to control

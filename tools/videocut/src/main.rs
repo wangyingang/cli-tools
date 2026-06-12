@@ -197,11 +197,11 @@ fn cut(args: &Cli) -> Result<CommandOutput> {
         );
     }
 
-    let aligned_duration = actual_end.unwrap_or(duration) - actual_start;
+    let filename_end = actual_end.unwrap_or(duration);
     let video_out = args
         .out
         .clone()
-        .unwrap_or_else(|| default_video_output(&args.video, aligned_duration));
+        .unwrap_or_else(|| default_video_output(&args.video, actual_start, filename_end));
     ensure_distinct_paths(&args.video, &video_out)?;
     ensure_output_available(&video_out, args.overwrite)?;
 
@@ -224,9 +224,14 @@ fn cut(args: &Cli) -> Result<CommandOutput> {
         None
     };
 
+    // External media tools may parse punctuation in relative paths as URL syntax.
+    // Use absolute paths for all FFmpeg/ffprobe calls while preserving output names.
+    let video_input_abs = absolute_path(&args.video)?;
+    let video_output_abs = absolute_path(&video_out)?;
+
     let ffmpeg_args = build_ffmpeg_args(
-        &args.video,
-        &video_out,
+        &video_input_abs,
+        &video_output_abs,
         actual_start,
         actual_end,
         args.overwrite,
@@ -248,8 +253,8 @@ fn cut(args: &Cli) -> Result<CommandOutput> {
         "ok": true,
         "dry_run": args.dry_run,
         "video": {
-            "input": absolute_path(&args.video)?,
-            "output": absolute_path(&video_out)?,
+            "input": video_input_abs,
+            "output": video_output_abs,
             "mode": if args.encode { "encode" } else { "copy" },
             "requested_start": format_hhmmss(start),
             "actual_start_seconds": actual_start,
@@ -306,7 +311,7 @@ fn cut(args: &Cli) -> Result<CommandOutput> {
         );
     }
 
-    let output_duration = probe_duration(&video_out)?;
+    let output_duration = probe_duration(&video_output_abs)?;
     let measured_end = actual_start + output_duration;
     let subtitle_end = actual_end.map_or(measured_end, |aligned_end| aligned_end.min(measured_end));
 
@@ -336,8 +341,8 @@ fn cut(args: &Cli) -> Result<CommandOutput> {
             "ok": true,
             "dry_run": false,
             "video": {
-                "input": absolute_path(&args.video)?,
-                "output": absolute_path(&video_out)?,
+                "input": video_input_abs,
+                "output": video_output_abs,
                 "mode": if args.encode { "encode" } else { "copy" },
                 "requested_start": format_hhmmss(start),
                 "actual_start_seconds": actual_start,
@@ -445,22 +450,23 @@ fn discover_subtitle(video: &Path) -> Result<Option<PathBuf>> {
     Ok(None)
 }
 
-fn default_video_output(video: &Path, duration_seconds: f64) -> PathBuf {
+fn default_video_output(video: &Path, begin_seconds: f64, end_seconds: f64) -> PathBuf {
     let parent = video.parent().unwrap_or_else(|| Path::new("."));
     let stem = video
         .file_stem()
         .unwrap_or_else(|| OsStr::new("video"))
         .to_string_lossy();
     let extension = video.extension().and_then(OsStr::to_str).unwrap_or("mp4");
-    let duration = format_duration_filename(duration_seconds);
-    parent.join(format!("{stem}.cut-{duration}.{extension}"))
+    let begin = format_filename_timestamp(begin_seconds);
+    let end = format_filename_timestamp(end_seconds);
+    parent.join(format!("{stem}.cut-{begin}-{end}.{extension}"))
 }
 
-fn format_duration_filename(duration_seconds: f64) -> String {
-    let total_milliseconds = seconds_to_milliseconds(duration_seconds);
+fn format_filename_timestamp(seconds: f64) -> String {
+    let total_milliseconds = seconds_to_milliseconds(seconds);
     let total_seconds = total_milliseconds / 1000;
     let milliseconds = total_milliseconds % 1000;
-    let base = format_hhmmss(total_seconds);
+    let base = format_hhmmss(total_seconds).replace(':', ".");
     if milliseconds == 0 {
         base
     } else {
@@ -600,13 +606,26 @@ mod tests {
     }
 
     #[test]
-    fn names_default_output_from_aligned_duration() {
-        let output = default_video_output(Path::new("/tmp/movie.mp4"), 60.125);
-        assert_eq!(output, PathBuf::from("/tmp/movie.cut-00:01:00.125.mp4"));
+    fn names_default_output_from_aligned_begin_and_end() {
+        let output = default_video_output(Path::new("/tmp/movie.mp4"), 3598.023, 3964.0);
+        assert_eq!(
+            output,
+            PathBuf::from("/tmp/movie.cut-00.59.58.023-01.06.04.mp4")
+        );
     }
 
     #[test]
-    fn omits_milliseconds_for_whole_second_duration() {
-        assert_eq!(format_duration_filename(4.0), "00:00:04");
+    fn omits_milliseconds_for_whole_second_timestamp() {
+        assert_eq!(format_filename_timestamp(4.0), "00.00.04");
+    }
+
+    #[test]
+    fn resolves_relative_timestamp_filename_to_absolute_path() {
+        let path = absolute_path(Path::new("movie.cut-00:06:05.365.mp4")).unwrap();
+        assert!(path.is_absolute());
+        assert_eq!(
+            path.file_name().and_then(OsStr::to_str),
+            Some("movie.cut-00:06:05.365.mp4")
+        );
     }
 }
