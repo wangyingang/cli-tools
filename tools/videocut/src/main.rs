@@ -460,11 +460,11 @@ fn format_duration_filename(duration_seconds: f64) -> String {
     let total_milliseconds = seconds_to_milliseconds(duration_seconds);
     let total_seconds = total_milliseconds / 1000;
     let milliseconds = total_milliseconds % 1000;
-    let base = format_hhmmss(total_seconds).replace(':', "-");
+    let base = format_hhmmss(total_seconds);
     if milliseconds == 0 {
         base
     } else {
-        format!("{base}-{milliseconds:03}")
+        format!("{base}.{milliseconds:03}")
     }
 }
 
@@ -602,11 +602,11 @@ mod tests {
     #[test]
     fn names_default_output_from_aligned_duration() {
         let output = default_video_output(Path::new("/tmp/movie.mp4"), 60.125);
-        assert_eq!(output, PathBuf::from("/tmp/movie.cut-00-01-00-125.mp4"));
+        assert_eq!(output, PathBuf::from("/tmp/movie.cut-00:01:00.125.mp4"));
     }
 
     #[test]
     fn omits_milliseconds_for_whole_second_duration() {
-        assert_eq!(format_duration_filename(4.0), "00-00-04");
+        assert_eq!(format_duration_filename(4.0), "00:00:04");
     }
 }

@@ -51,12 +51,12 @@ By default, output files are written beside the input and named from the actual
 aligned duration. A four-second clip is named:
 
 ```text
-movie.cut-00-00-04.mp4
-movie.cut-00-00-04.srt
+movie.cut-00:00:04.mp4
+movie.cut-00:00:04.srt
 ```
 
 Non-whole-second durations include milliseconds, for example
-`movie.cut-00-00-04-125.mp4`.
+`movie.cut-00:00:04.125.mp4`.
 
 When a subtitle is processed, its output is placed beside the output video with
 the same stem and the original subtitle extension. Use `-o/--out` to control
