@@ -42,10 +42,6 @@ struct Cli {
     #[arg(short = 'o', long, value_name = "PATH")]
     out: Option<PathBuf>,
 
-    /// Output subtitle path
-    #[arg(long, value_name = "PATH")]
-    subtitle_out: Option<PathBuf>,
-
     /// Replace existing output files
     #[arg(long)]
     overwrite: bool,
@@ -153,16 +149,9 @@ fn cut(args: &Cli) -> Result<CommandOutput> {
         discover_subtitle(&args.video)?
     };
 
-    if args.subtitle_out.is_some() && subtitle_in.is_none() {
-        bail!("--subtitle-out requires an explicit or discovered subtitle");
-    }
-
     let subtitle_plan = if let Some(input) = subtitle_in {
         let format = SubtitleFormat::from_path(&input)?;
-        let output = args
-            .subtitle_out
-            .clone()
-            .unwrap_or_else(|| default_subtitle_output(&video_out, &input));
+        let output = default_subtitle_output(&video_out, &input);
         ensure_distinct_paths(&input, &output)?;
         ensure_output_available(&output, args.overwrite)?;
         let source = fs::read_to_string(&input)
@@ -446,6 +435,15 @@ mod tests {
         assert_eq!(cli.end.as_deref(), Some("00:01:00"));
         assert_eq!(cli.subtitle, Some(PathBuf::from("captions.srt")));
         assert_eq!(cli.out, Some(PathBuf::from("clip.mp4")));
+    }
+
+    #[test]
+    fn derives_subtitle_output_from_video_output() {
+        let output = default_subtitle_output(
+            Path::new("/tmp/scenes/clip.mp4"),
+            Path::new("/videos/source.ass"),
+        );
+        assert_eq!(output, PathBuf::from("/tmp/scenes/clip.ass"));
     }
 
     #[test]

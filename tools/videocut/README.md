@@ -20,7 +20,6 @@ avcut <video> \
   [-e|--end <hh:mm:ss>] \
   [-s|--subtitle <path>] \
   [-o|--out <video-path>] \
-  [--subtitle-out <path>] \
   [--overwrite] \
   [--dry-run] \
   [--json]
@@ -47,8 +46,10 @@ movie.cut-00-01-30-00-03-00.mp4
 movie.cut-00-01-30-00-03-00.srt
 ```
 
-Use `--out` and `--subtitle-out` for explicit paths, `--overwrite` to replace
-existing outputs, and `--dry-run` to inspect the complete plan without writing.
+When a subtitle is processed, its output is placed beside the output video with
+the same stem and the original subtitle extension. Use `-o/--out` to control
+both output names, `--overwrite` to replace existing outputs, and `--dry-run`
+to inspect the complete plan without writing.
 
 ## JSON policy
 
