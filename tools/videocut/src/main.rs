@@ -12,7 +12,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 use serde_json::{Value, json};
 
-use crate::media::{command_path, probe_duration};
+use crate::media::{command_path, keyframes_around, probe_duration};
 use crate::subtitle::{SubtitleFormat, trim_subtitle};
 use crate::timecode::{format_hhmmss, parse_hhmmss};
 
@@ -20,7 +20,7 @@ use crate::timecode::{format_hhmmss, parse_hhmmss};
 #[command(
     name = "avcut",
     version,
-    about = "Cut video and sidecar subtitles on an exact-second timeline"
+    about = "Cut video at outward-aligned keyframes and keep sidecar subtitles synchronized"
 )]
 struct Cli {
     /// Input video path
@@ -41,6 +41,10 @@ struct Cli {
     /// Output video path
     #[arg(short = 'o', long, value_name = "PATH")]
     out: Option<PathBuf>,
+
+    /// Re-encode at the requested boundaries instead of copying at nearby keyframes
+    #[arg(long)]
+    encode: bool,
 
     /// Replace existing output files
     #[arg(long)]
@@ -135,6 +139,62 @@ fn cut(args: &Cli) -> Result<CommandOutput> {
         bail!("end time is outside the video duration ({duration:.3} seconds)");
     }
 
+    let requested_start = start as f64;
+    let actual_start = if args.encode {
+        requested_start
+    } else if start == 0 {
+        0.0
+    } else {
+        let keyframe = keyframes_around(&args.video, requested_start)?
+            .previous
+            .ok_or_else(|| {
+                anyhow!("no keyframe found before requested start {requested_start:.3}s")
+            })?;
+        let error = requested_start - keyframe;
+        if error > 1.0 + f64::EPSILON {
+            bail!(
+                "previous keyframe is {error:.3} seconds before requested start (requested {:.3}s, keyframe {:.3}s); rerun with --encode for exact cutting",
+                requested_start,
+                keyframe
+            );
+        }
+        keyframe
+    };
+
+    let requested_end = end.map(|value| value as f64);
+    let actual_end = if args.encode {
+        requested_end
+    } else if let Some(requested_end) = requested_end {
+        let next = keyframes_around(&args.video, requested_end)?.next;
+        let boundary = next.unwrap_or(duration);
+        let error = boundary - requested_end;
+        if error < -0.001 {
+            bail!("no keyframe or EOF found after requested end {requested_end:.3}s");
+        }
+        if error > 1.0 + f64::EPSILON {
+            bail!(
+                "next keyframe is {error:.3} seconds after requested end (requested {:.3}s, keyframe {:.3}s); rerun with --encode for exact cutting",
+                requested_end,
+                boundary
+            );
+        }
+        Some(boundary)
+    } else {
+        None
+    };
+    let start_error = round_seconds(requested_start - actual_start);
+    let end_error = actual_end
+        .zip(requested_end)
+        .map(|(actual, requested)| round_seconds(actual - requested));
+
+    if let Some(actual_end) = actual_end
+        && actual_start >= actual_end
+    {
+        bail!(
+            "aligned start {actual_start:.3}s is not before aligned end {actual_end:.3}s; rerun with --encode"
+        );
+    }
+
     let video_out = args
         .out
         .clone()
@@ -156,13 +216,19 @@ fn cut(args: &Cli) -> Result<CommandOutput> {
         ensure_output_available(&output, args.overwrite)?;
         let source = fs::read_to_string(&input)
             .with_context(|| format!("failed to read subtitle {}", input.display()))?;
-        let trimmed = trim_subtitle(&source, format, start * 1000, end.map(|v| v * 1000))?;
-        Some((input, output, trimmed, format))
+        Some((input, output, source, format))
     } else {
         None
     };
 
-    let ffmpeg_args = build_ffmpeg_args(&args.video, &video_out, start, end, args.overwrite);
+    let ffmpeg_args = build_ffmpeg_args(
+        &args.video,
+        &video_out,
+        actual_start,
+        actual_end,
+        args.overwrite,
+        args.encode,
+    );
     let command_display = shell_command_display("ffmpeg", &ffmpeg_args);
     let subtitle_json = subtitle_plan
         .as_ref()
@@ -181,8 +247,13 @@ fn cut(args: &Cli) -> Result<CommandOutput> {
         "video": {
             "input": absolute_path(&args.video)?,
             "output": absolute_path(&video_out)?,
-            "start": format_hhmmss(start),
-            "end": end.map(format_hhmmss),
+            "mode": if args.encode { "encode" } else { "copy" },
+            "requested_start": format_hhmmss(start),
+            "actual_start_seconds": actual_start,
+            "start_error_seconds": start_error,
+            "requested_end": end.map(format_hhmmss),
+            "actual_end_seconds": actual_end,
+            "end_error_seconds": end_error,
             "ffmpeg_argv": ffmpeg_args.iter().map(|arg| arg.to_string_lossy()).collect::<Vec<_>>()
         },
         "subtitle": subtitle_json,
@@ -202,7 +273,11 @@ fn cut(args: &Cli) -> Result<CommandOutput> {
         );
         return Ok(CommandOutput {
             human: format!(
-                "dry run\nvideo: {} -> {}\n{}\ncommand: {}",
+                "dry run\nmode: {}\nrequested start: {}\nactual start: {:.3}s\nactual end: {}\nvideo: {} -> {}\n{}\ncommand: {}",
+                if args.encode { "encode" } else { "copy" },
+                format_hhmmss(start),
+                actual_start,
+                actual_end.map_or_else(|| "EOF".to_string(), |value| format!("{value:.3}s")),
                 args.video.display(),
                 video_out.display(),
                 subtitle_line,
@@ -228,7 +303,14 @@ fn cut(args: &Cli) -> Result<CommandOutput> {
         );
     }
 
-    if let Some((_, output, trimmed, _)) = &subtitle_plan {
+    let output_duration = probe_duration(&video_out)?;
+    let measured_end = actual_start + output_duration;
+    let subtitle_end = actual_end.map_or(measured_end, |aligned_end| aligned_end.min(measured_end));
+
+    if let Some((_, output, source, format)) = &subtitle_plan {
+        let clip_start_ms = seconds_to_milliseconds(actual_start);
+        let clip_end_ms = seconds_to_milliseconds(subtitle_end);
+        let trimmed = trim_subtitle(source, *format, clip_start_ms, Some(clip_end_ms))?;
         if let Some(parent) = output.parent() {
             fs::create_dir_all(parent).with_context(|| {
                 format!(
@@ -253,8 +335,15 @@ fn cut(args: &Cli) -> Result<CommandOutput> {
             "video": {
                 "input": absolute_path(&args.video)?,
                 "output": absolute_path(&video_out)?,
-                "start": format_hhmmss(start),
-                "end": end.map(format_hhmmss)
+                "mode": if args.encode { "encode" } else { "copy" },
+                "requested_start": format_hhmmss(start),
+                "actual_start_seconds": actual_start,
+                "start_error_seconds": start_error,
+                "requested_end": end.map(format_hhmmss),
+                "aligned_end_seconds": actual_end,
+                "end_error_seconds": end_error,
+                "output_duration_seconds": output_duration,
+                "subtitle_end_seconds": subtitle_end
             },
             "subtitle": subtitle_json
         }),
@@ -264,22 +353,23 @@ fn cut(args: &Cli) -> Result<CommandOutput> {
 fn build_ffmpeg_args(
     input: &Path,
     output: &Path,
-    start: u64,
-    end: Option<u64>,
+    start: f64,
+    end: Option<f64>,
     overwrite: bool,
+    encode: bool,
 ) -> Vec<OsString> {
     let mut args = vec![
         OsString::from(if overwrite { "-y" } else { "-n" }),
         OsString::from("-hide_banner"),
         OsString::from("-ss"),
-        OsString::from(format_hhmmss(start)),
+        OsString::from(format_seconds(start)),
         OsString::from("-i"),
         input.as_os_str().to_os_string(),
     ];
     if let Some(end) = end {
         args.extend([
             OsString::from("-t"),
-            OsString::from(format_hhmmss(end - start)),
+            OsString::from(format_seconds(end - start)),
         ]);
     }
     args.extend([
@@ -287,14 +377,22 @@ fn build_ffmpeg_args(
         OsString::from("0:v:0?"),
         OsString::from("-map"),
         OsString::from("0:a?"),
-        OsString::from("-c:v"),
-        OsString::from("libx264"),
-        OsString::from("-preset"),
-        OsString::from("medium"),
-        OsString::from("-crf"),
-        OsString::from("18"),
-        OsString::from("-c:a"),
-        OsString::from("aac"),
+    ]);
+    if encode {
+        args.extend([
+            OsString::from("-c:v"),
+            OsString::from("libx264"),
+            OsString::from("-preset"),
+            OsString::from("medium"),
+            OsString::from("-crf"),
+            OsString::from("18"),
+            OsString::from("-c:a"),
+            OsString::from("aac"),
+        ]);
+    } else {
+        args.extend([OsString::from("-c"), OsString::from("copy")]);
+    }
+    args.extend([
         OsString::from("-avoid_negative_ts"),
         OsString::from("make_zero"),
     ]);
@@ -310,6 +408,18 @@ fn build_ffmpeg_args(
     }
     args.push(output.as_os_str().to_os_string());
     args
+}
+
+fn format_seconds(seconds: f64) -> String {
+    format!("{seconds:.3}")
+}
+
+fn round_seconds(seconds: f64) -> f64 {
+    (seconds * 1000.0).round() / 1000.0
+}
+
+fn seconds_to_milliseconds(seconds: f64) -> u64 {
+    (seconds * 1000.0).round().max(0.0) as u64
 }
 
 fn discover_subtitle(video: &Path) -> Result<Option<PathBuf>> {
@@ -435,6 +545,7 @@ mod tests {
         assert_eq!(cli.end.as_deref(), Some("00:01:00"));
         assert_eq!(cli.subtitle, Some(PathBuf::from("captions.srt")));
         assert_eq!(cli.out, Some(PathBuf::from("clip.mp4")));
+        assert!(!cli.encode);
     }
 
     #[test]
@@ -451,13 +562,30 @@ mod tests {
         let args = build_ffmpeg_args(
             Path::new("input.mp4"),
             Path::new("output.mp4"),
-            65,
-            Some(125),
+            65.25,
+            Some(125.0),
+            false,
             false,
         );
         let args: Vec<_> = args.iter().map(|arg| arg.to_string_lossy()).collect();
-        assert!(args.windows(2).any(|pair| pair == ["-ss", "00:01:05"]));
-        assert!(args.windows(2).any(|pair| pair == ["-t", "00:01:00"]));
+        assert!(args.windows(2).any(|pair| pair == ["-ss", "65.250"]));
+        assert!(args.windows(2).any(|pair| pair == ["-t", "59.750"]));
+        assert!(args.windows(2).any(|pair| pair == ["-c", "copy"]));
+    }
+
+    #[test]
+    fn builds_encode_args() {
+        let args = build_ffmpeg_args(
+            Path::new("input.mp4"),
+            Path::new("output.mp4"),
+            65.0,
+            Some(125.0),
+            false,
+            true,
+        );
+        let args: Vec<_> = args.iter().map(|arg| arg.to_string_lossy()).collect();
+        assert!(args.windows(2).any(|pair| pair == ["-c:v", "libx264"]));
+        assert!(!args.windows(2).any(|pair| pair == ["-c", "copy"]));
     }
 
     #[test]

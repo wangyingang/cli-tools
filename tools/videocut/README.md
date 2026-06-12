@@ -1,8 +1,7 @@
 # avcut
 
-`avcut` cuts a video at exact whole-second boundaries and keeps a sidecar
-subtitle synchronized with the new timeline. It uses the installed `ffmpeg`
-and `ffprobe` commands.
+`avcut` cuts a video and keeps a sidecar subtitle synchronized with the new
+timeline. It uses the installed `ffmpeg` and `ffprobe` commands.
 
 ## Install
 
@@ -20,6 +19,7 @@ avcut <video> \
   [-e|--end <hh:mm:ss>] \
   [-s|--subtitle <path>] \
   [-o|--out <video-path>] \
+  [--encode] \
   [--overwrite] \
   [--dry-run] \
   [--json]
@@ -29,14 +29,22 @@ avcut <video> \
 to the end of the video. Times must use `hh:mm:ss`; minutes and seconds must be
 between `00` and `59`.
 
+By default, `avcut` copies the original video and audio streams without
+re-encoding. It aligns outward so content is not lost: the start moves to the
+previous video keyframe and the end moves to the next video keyframe. If either
+boundary moves by more than one second, the command exits before writing and
+asks for `--encode`. Use `--encode` to cut at the requested times by re-encoding
+video as H.264 and audio as AAC.
+
 When `--subtitle` is omitted, `avcut` searches beside the video for an exact
 same-stem subtitle in this order: `.srt`, `.vtt`, `.ass`, `.ssa`. If no match is
-found, it cuts only the video. Subtitle cues that overlap the selected interval
-are clipped to the interval and shifted so the new video begins at `00:00:00`.
+found, it cuts only the video. Subtitle cues are clipped to the actual aligned
+video interval and shifted by the actual video start, not the requested start.
 
 ```bash
 avcut ./movie.mp4 -b 00:01:30 -e 00:03:00 -o ./clip.mp4
 avcut ./movie.mp4 -b 00:01:30 -s ./captions.srt --dry-run
+avcut ./movie.mp4 -b 00:01:30 -e 00:03:00 --encode
 ```
 
 By default, output files are written beside the input using a name such as:
