@@ -16,6 +16,8 @@ use crate::media::{command_path, keyframes_around, probe_duration};
 use crate::subtitle::{SubtitleFormat, trim_subtitle};
 use crate::timecode::{format_hhmmss, parse_hhmmss};
 
+const MAX_ALIGNMENT_ERROR_SECONDS: f64 = 5.0;
+
 #[derive(Parser)]
 #[command(
     name = "avcut",
@@ -151,7 +153,7 @@ fn cut(args: &Cli) -> Result<CommandOutput> {
                 anyhow!("no keyframe found before requested start {requested_start:.3}s")
             })?;
         let error = requested_start - keyframe;
-        if error > 1.0 + f64::EPSILON {
+        if error > MAX_ALIGNMENT_ERROR_SECONDS + f64::EPSILON {
             bail!(
                 "previous keyframe is {error:.3} seconds before requested start (requested {:.3}s, keyframe {:.3}s); rerun with --encode for exact cutting",
                 requested_start,
@@ -171,7 +173,7 @@ fn cut(args: &Cli) -> Result<CommandOutput> {
         if error < -0.001 {
             bail!("no keyframe or EOF found after requested end {requested_end:.3}s");
         }
-        if error > 1.0 + f64::EPSILON {
+        if error > MAX_ALIGNMENT_ERROR_SECONDS + f64::EPSILON {
             bail!(
                 "next keyframe is {error:.3} seconds after requested end (requested {:.3}s, keyframe {:.3}s); rerun with --encode for exact cutting",
                 requested_end,
@@ -195,10 +197,11 @@ fn cut(args: &Cli) -> Result<CommandOutput> {
         );
     }
 
+    let aligned_duration = actual_end.unwrap_or(duration) - actual_start;
     let video_out = args
         .out
         .clone()
-        .unwrap_or_else(|| default_video_output(&args.video, start, end));
+        .unwrap_or_else(|| default_video_output(&args.video, aligned_duration));
     ensure_distinct_paths(&args.video, &video_out)?;
     ensure_output_available(&video_out, args.overwrite)?;
 
@@ -442,19 +445,27 @@ fn discover_subtitle(video: &Path) -> Result<Option<PathBuf>> {
     Ok(None)
 }
 
-fn default_video_output(video: &Path, start: u64, end: Option<u64>) -> PathBuf {
+fn default_video_output(video: &Path, duration_seconds: f64) -> PathBuf {
     let parent = video.parent().unwrap_or_else(|| Path::new("."));
     let stem = video
         .file_stem()
         .unwrap_or_else(|| OsStr::new("video"))
         .to_string_lossy();
     let extension = video.extension().and_then(OsStr::to_str).unwrap_or("mp4");
-    let start = format_hhmmss(start).replace(':', "-");
-    let end = end
-        .map(format_hhmmss)
-        .unwrap_or_else(|| "end".to_string())
-        .replace(':', "-");
-    parent.join(format!("{stem}.cut-{start}-{end}.{extension}"))
+    let duration = format_duration_filename(duration_seconds);
+    parent.join(format!("{stem}.cut-{duration}.{extension}"))
+}
+
+fn format_duration_filename(duration_seconds: f64) -> String {
+    let total_milliseconds = seconds_to_milliseconds(duration_seconds);
+    let total_seconds = total_milliseconds / 1000;
+    let milliseconds = total_milliseconds % 1000;
+    let base = format_hhmmss(total_seconds).replace(':', "-");
+    if milliseconds == 0 {
+        base
+    } else {
+        format!("{base}-{milliseconds:03}")
+    }
 }
 
 fn default_subtitle_output(video_out: &Path, subtitle_in: &Path) -> PathBuf {
@@ -589,11 +600,13 @@ mod tests {
     }
 
     #[test]
-    fn names_default_output_from_time_range() {
-        let output = default_video_output(Path::new("/tmp/movie.mp4"), 5, Some(65));
-        assert_eq!(
-            output,
-            PathBuf::from("/tmp/movie.cut-00-00-05-00-01-05.mp4")
-        );
+    fn names_default_output_from_aligned_duration() {
+        let output = default_video_output(Path::new("/tmp/movie.mp4"), 60.125);
+        assert_eq!(output, PathBuf::from("/tmp/movie.cut-00-01-00-125.mp4"));
+    }
+
+    #[test]
+    fn omits_milliseconds_for_whole_second_duration() {
+        assert_eq!(format_duration_filename(4.0), "00-00-04");
     }
 }
