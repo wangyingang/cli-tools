@@ -9,10 +9,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use anyhow::{Context, Result, anyhow, bail};
-use clap::{Args, Parser, Subcommand};
+use clap::Parser;
 use serde_json::{Value, json};
 
-use crate::media::{command_path, first_version_line, probe_duration};
+use crate::media::{command_path, probe_duration};
 use crate::subtitle::{SubtitleFormat, trim_subtitle};
 use crate::timecode::{format_hhmmss, parse_hhmmss};
 
@@ -23,52 +23,23 @@ use crate::timecode::{format_hhmmss, parse_hhmmss};
     about = "Cut video and sidecar subtitles on an exact-second timeline"
 )]
 struct Cli {
-    /// Emit stable machine-readable JSON to stdout
-    #[arg(long, global = true)]
-    json: bool,
-
-    #[command(subcommand)]
-    command: Commands,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// Check FFmpeg dependencies and local readiness
-    Doctor,
-    /// Inspect video duration and discover a same-name subtitle
-    Probe { video: PathBuf },
-    /// Cut a video and its sidecar subtitle
-    Cut(CutArgs),
-    /// Pass arguments directly to the installed ffmpeg binary
-    Ffmpeg {
-        #[arg(last = true, allow_hyphen_values = true)]
-        args: Vec<OsString>,
-    },
-}
-
-#[derive(Args)]
-struct CutArgs {
     /// Input video path
     video: PathBuf,
 
     /// Inclusive start time in hh:mm:ss (default: 00:00:00)
-    #[arg(long, value_name = "hh:mm:ss")]
+    #[arg(short = 'b', long, value_name = "hh:mm:ss")]
     start: Option<String>,
 
     /// End time in hh:mm:ss (default: end of video)
-    #[arg(long, value_name = "hh:mm:ss")]
+    #[arg(short = 'e', long, value_name = "hh:mm:ss")]
     end: Option<String>,
 
     /// Explicit sidecar subtitle (.srt, .vtt, .ass, or .ssa)
-    #[arg(long, value_name = "PATH", conflicts_with = "no_subtitle")]
+    #[arg(short = 's', long, value_name = "PATH")]
     subtitle: Option<PathBuf>,
 
-    /// Do not discover or cut a sidecar subtitle
-    #[arg(long)]
-    no_subtitle: bool,
-
     /// Output video path
-    #[arg(long, value_name = "PATH")]
+    #[arg(short = 'o', long, value_name = "PATH")]
     out: Option<PathBuf>,
 
     /// Output subtitle path
@@ -82,6 +53,10 @@ struct CutArgs {
     /// Show the resolved plan without writing files
     #[arg(long)]
     dry_run: bool,
+
+    /// Emit stable machine-readable JSON to stdout
+    #[arg(long)]
+    json: bool,
 }
 
 struct CommandOutput {
@@ -112,7 +87,7 @@ fn main() -> ExitCode {
         }
     };
 
-    match run(&cli) {
+    match cut(&cli) {
         Ok(output) => {
             if cli.json {
                 println!("{}", output.json);
@@ -141,84 +116,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(cli: &Cli) -> Result<CommandOutput> {
-    match &cli.command {
-        Commands::Doctor => doctor(),
-        Commands::Probe { video } => probe(video),
-        Commands::Cut(args) => cut(args),
-        Commands::Ffmpeg { args } => raw_ffmpeg(args),
-    }
-}
-
-fn doctor() -> Result<CommandOutput> {
-    let ffmpeg = command_path("ffmpeg");
-    let ffprobe = command_path("ffprobe");
-    let ready = ffmpeg.is_some() && ffprobe.is_some();
-    let ffmpeg_version = ffmpeg
-        .as_deref()
-        .and_then(|path| first_version_line(path).ok());
-    let ffprobe_version = ffprobe
-        .as_deref()
-        .and_then(|path| first_version_line(path).ok());
-
-    let human = if ready {
-        format!(
-            "ready\nffmpeg: {}\nffprobe: {}",
-            ffmpeg.as_ref().unwrap().display(),
-            ffprobe.as_ref().unwrap().display()
-        )
-    } else {
-        "not ready: install ffmpeg and ensure ffmpeg/ffprobe are on PATH".to_string()
-    };
-
-    Ok(CommandOutput {
-        human,
-        json: json!({
-            "ok": true,
-            "ready": ready,
-            "auth_required": false,
-            "dependencies": {
-                "ffmpeg": {
-                    "found": ffmpeg.is_some(),
-                    "path": ffmpeg,
-                    "version": ffmpeg_version
-                },
-                "ffprobe": {
-                    "found": ffprobe.is_some(),
-                    "path": ffprobe,
-                    "version": ffprobe_version
-                }
-            }
-        }),
-    })
-}
-
-fn probe(video: &Path) -> Result<CommandOutput> {
-    validate_input_file(video, "video")?;
-    let duration = probe_duration(video)?;
-    let subtitle = discover_subtitle(video)?;
-    let human = format!(
-        "video: {}\nduration: {} ({duration:.3} seconds)\nsubtitle: {}",
-        video.display(),
-        format_hhmmss(duration.floor() as u64),
-        subtitle
-            .as_ref()
-            .map_or_else(|| "none".to_string(), |path| path.display().to_string())
-    );
-
-    Ok(CommandOutput {
-        human,
-        json: json!({
-            "ok": true,
-            "video": absolute_path(video)?,
-            "duration_seconds": duration,
-            "duration_hh_mm_ss": format_hhmmss(duration.floor() as u64),
-            "subtitle": subtitle.map(|path| absolute_path(&path)).transpose()?
-        }),
-    })
-}
-
-fn cut(args: &CutArgs) -> Result<CommandOutput> {
+fn cut(args: &Cli) -> Result<CommandOutput> {
     validate_input_file(&args.video, "video")?;
     command_path("ffmpeg").ok_or_else(|| anyhow!("ffmpeg was not found on PATH"))?;
     command_path("ffprobe").ok_or_else(|| anyhow!("ffprobe was not found on PATH"))?;
@@ -248,9 +146,7 @@ fn cut(args: &CutArgs) -> Result<CommandOutput> {
     ensure_distinct_paths(&args.video, &video_out)?;
     ensure_output_available(&video_out, args.overwrite)?;
 
-    let subtitle_in = if args.no_subtitle {
-        None
-    } else if let Some(path) = &args.subtitle {
+    let subtitle_in = if let Some(path) = &args.subtitle {
         validate_input_file(path, "subtitle")?;
         Some(path.clone())
     } else {
@@ -372,32 +268,6 @@ fn cut(args: &CutArgs) -> Result<CommandOutput> {
                 "end": end.map(format_hhmmss)
             },
             "subtitle": subtitle_json
-        }),
-    })
-}
-
-fn raw_ffmpeg(args: &[OsString]) -> Result<CommandOutput> {
-    command_path("ffmpeg").ok_or_else(|| anyhow!("ffmpeg was not found on PATH"))?;
-    let output = Command::new("ffmpeg")
-        .args(args)
-        .output()
-        .context("failed to start ffmpeg")?;
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    if !output.status.success() {
-        bail!(
-            "ffmpeg failed with status {}: {}",
-            output.status,
-            stderr.trim()
-        );
-    }
-    Ok(CommandOutput {
-        human: format!("{}{}", stdout, stderr),
-        json: json!({
-            "ok": true,
-            "exit_code": output.status.code(),
-            "stdout": stdout,
-            "stderr": stderr
         }),
     })
 }
@@ -554,6 +424,29 @@ fn shell_quote(value: &OsStr) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_short_options() {
+        let cli = Cli::try_parse_from([
+            "avcut",
+            "input.mp4",
+            "-b",
+            "00:00:05",
+            "-e",
+            "00:01:00",
+            "-s",
+            "captions.srt",
+            "-o",
+            "clip.mp4",
+        ])
+        .unwrap();
+
+        assert_eq!(cli.video, PathBuf::from("input.mp4"));
+        assert_eq!(cli.start.as_deref(), Some("00:00:05"));
+        assert_eq!(cli.end.as_deref(), Some("00:01:00"));
+        assert_eq!(cli.subtitle, Some(PathBuf::from("captions.srt")));
+        assert_eq!(cli.out, Some(PathBuf::from("clip.mp4")));
+    }
 
     #[test]
     fn builds_exact_duration_ffmpeg_args() {

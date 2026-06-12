@@ -8,29 +8,37 @@ and `ffprobe` commands.
 
 ```bash
 make install-local
-avcut --json doctor
 ```
 
 The binary is installed at `~/.local/bin/avcut`.
 
-## Commands
+## Usage
 
 ```bash
-avcut --json doctor
-avcut --json probe ./movie.mp4
-avcut cut ./movie.mp4 --start 00:01:30 --end 00:03:00
-avcut cut ./movie.mp4 --start 00:01:30 --subtitle ./captions.srt --dry-run
-avcut ffmpeg -- -version
+avcut <video> \
+  [-b|--start <hh:mm:ss>] \
+  [-e|--end <hh:mm:ss>] \
+  [-s|--subtitle <path>] \
+  [-o|--out <video-path>] \
+  [--subtitle-out <path>] \
+  [--overwrite] \
+  [--dry-run] \
+  [--json]
 ```
 
 `--start` defaults to `00:00:00`. When `--end` is omitted, the clip continues
 to the end of the video. Times must use `hh:mm:ss`; minutes and seconds must be
 between `00` and `59`.
 
-Unless `--subtitle` or `--no-subtitle` is supplied, `avcut` searches beside the
-video for an exact same-stem subtitle in this order: `.srt`, `.vtt`, `.ass`,
-`.ssa`. Subtitle cues that overlap the selected interval are clipped to the
-interval and shifted so the new video begins at `00:00:00`.
+When `--subtitle` is omitted, `avcut` searches beside the video for an exact
+same-stem subtitle in this order: `.srt`, `.vtt`, `.ass`, `.ssa`. If no match is
+found, it cuts only the video. Subtitle cues that overlap the selected interval
+are clipped to the interval and shifted so the new video begins at `00:00:00`.
+
+```bash
+avcut ./movie.mp4 -b 00:01:30 -e 00:03:00 -o ./clip.mp4
+avcut ./movie.mp4 -b 00:01:30 -s ./captions.srt --dry-run
+```
 
 By default, output files are written beside the input using a name such as:
 
@@ -44,26 +52,9 @@ existing outputs, and `--dry-run` to inspect the complete plan without writing.
 
 ## JSON policy
 
-With `--json`, stdout contains JSON only. Diagnostics are included in the
-machine-readable error object and credentials are not applicable.
-
-Successful commands return an object beginning with:
-
-```json
-{"ok":true}
-```
-
-Failures return a nonzero exit code and:
+With `--json`, stdout contains JSON only. Successful runs return an object
+beginning with `{"ok":true}`. Failures return a nonzero exit code and:
 
 ```json
 {"ok":false,"error":{"kind":"runtime","message":"..."}}
-```
-
-Command families:
-
-```bash
-avcut --json doctor
-avcut --json probe ./movie.mp4
-avcut --json cut ./movie.mp4 --start 00:01:30 --end 00:03:00 --dry-run
-avcut --json ffmpeg -- -version
 ```

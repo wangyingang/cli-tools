@@ -22,21 +22,6 @@ pub fn command_path(name: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-pub fn first_version_line(path: &Path) -> Result<String> {
-    let output = Command::new(path)
-        .arg("-version")
-        .output()
-        .with_context(|| format!("failed to run {}", path.display()))?;
-    if !output.status.success() {
-        bail!("{} -version failed", path.display());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .next()
-        .unwrap_or_default()
-        .to_string())
-}
-
 pub fn probe_duration(video: &Path) -> Result<f64> {
     let output = Command::new("ffprobe")
         .args([
