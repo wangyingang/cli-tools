@@ -29,6 +29,24 @@ uv tool install --editable .
 subx ./video.mp4 --engine paddle --lang mixed
 ```
 
+使用单行字幕高度预设：
+
+```bash
+subx ./video.mp4 --engine paddle --lang zh -l single
+```
+
+使用更激进的性能档位（会牺牲一部分对齐精度来减少 OCR 调用）：
+
+```bash
+subx ./video.mp4 --engine paddle --lang zh -l single --speed-profile aggressive
+```
+
+按“宽度/高度/离底部偏移”指定结构化 ROI：
+
+```bash
+subx ./video.mp4 --engine paddle --lang mixed -w 0.8 -H 0.18 -b 0.02
+```
+
 使用 ONNX 候选后端：
 
 ```bash
@@ -84,6 +102,13 @@ samples/<sample_id>/
 ## 当前实现说明
 
 - 主默认后端是 PaddleOCR，目标模型配置是 `PP-OCRv5_server_det + PP-OCRv5_server_rec`
+- 显式 `--roi` 仍可直接传完整 `x,y,w,h`；若不传 `--roi`，则会走结构化 ROI preset
+- 当前 `--lines` 默认值是 `single`；若不想手写 `x,y,w,h`，可用 `--lines/-l`、`--width/-w`、`--height/-H`、`--bottom-offset/-b`
+- 当前 `single` preset 默认按“`width=0.75` + 模型输入高度约 `100.8px`”推导 ROI；当前 `double` preset 默认按“`width=1.0` + 模型输入高度约 `144px`”推导 ROI
+- 当前 `sample_every` 的默认值也跟 `--lines` 绑定：`single=6`，`double=6`；显式 `--sample-every` 会覆盖这个 preset
+- 当前 `--speed-profile` 默认为 `balanced`；`aggressive` 目前只作用于 `single`，会用更激进的候选提交策略来显著减少 OCR 调用次数
+- 当前 `workers` 默认值已从 `4` 提到 `6`；在现有 `samples/` 上，`6` 比 `1/2/4` 更快，而 `8` 没有继续稳定变好
+- `--lines` 会结合视频尺寸、ROI 宽度和 `1280` 宽上限反推 ROI 高度，让进入 OCR 的实际像素高度尽量贴近 preset 目标；显式 `--width` 或 `--height` 会分别覆盖对应 preset
 - Paddle v5 模型通过 Hugging Face Hub 下载，并默认复用 `~/.cache/huggingface/hub` 下的 snapshot cache
 - ONNX 候选后端优先使用 [monkt/paddleocr-onnx](https://huggingface.co/monkt/paddleocr-onnx)
 - `subx` 只保留最终用户的提取入口；`subx-dev` 承接仓库内评估与基准命令

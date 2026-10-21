@@ -23,9 +23,10 @@ class ExtractConfig:
     lang: str = "mixed"
     engine: str = "paddle"
     sample_every: int = 3
-    workers: int = 4
+    workers: int = 6
     diff_threshold: float = 0.01
-    ocr_candidate_similarity_threshold: float = 0.97
+    ocr_candidate_similarity_threshold: float = 0.86
+    ocr_entry_debounce_seconds: float = 0.0
     ocr_min_score: float = 0.5
     resize_max_width: int = 1280
     max_pending_ocr_frames: int = 64
@@ -41,7 +42,7 @@ class Checkpoint:
 
 _WORKER_BACKEND = None
 _WORKER_PROCESS_POOL = None
-_OCR_SUBMISSION_DEBOUNCE_SECONDS = 0.15
+_OCR_SUBMISSION_DEBOUNCE_SECONDS = 0.225
 
 
 class ProgressReporter(Protocol):
@@ -122,6 +123,8 @@ def extract_subtitles(
         raise ValueError("--workers must be greater than 0.")
     if config.max_pending_ocr_frames <= 0:
         raise ValueError("--max-pending-ocr-frames must be greater than 0.")
+    if config.ocr_entry_debounce_seconds < 0:
+        raise ValueError("--ocr-entry-debounce-seconds must be greater than or equal to 0.")
 
     progress_reporter = progress_reporter or _OverallProgressReporter(sample_every=config.sample_every)
     started_at = time.perf_counter()
@@ -194,6 +197,7 @@ def _collect_checkpoints(
     last_gray = None
     last_submitted_gray = None
     last_submitted_time = None
+    pending_entry_time = None
     sample_index = 0
     frame_index = 0
 
@@ -210,14 +214,25 @@ def _collect_checkpoints(
                 timestamp = capture.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
                 stats.sampled_frames += 1
                 roi_frame = crop_frame(frame, config.roi)
-                gray = _prepare_roi_gray(roi_frame, config.resize_max_width)
+                prepared_roi_frame = _resize_roi_frame(roi_frame, config.resize_max_width)
+                gray = _prepare_roi_gray(prepared_roi_frame, config.resize_max_width)
                 changed = sample_index == 0 or not _is_visually_similar(last_gray, gray, config.diff_threshold)
-                should_submit = changed and (
+                distinct_vs_last_submitted = changed and (
                     last_submitted_gray is None
                     or _candidate_similarity_score(last_submitted_gray, gray) < config.ocr_candidate_similarity_threshold
                 )
+                should_submit = distinct_vs_last_submitted
                 if should_submit and config.sample_every > 1 and last_submitted_time is not None:
-                    should_submit = (timestamp - last_submitted_time) >= _OCR_SUBMISSION_DEBOUNCE_SECONDS
+                    if config.ocr_entry_debounce_seconds > 0:
+                        if pending_entry_time is None:
+                            pending_entry_time = timestamp
+                            should_submit = False
+                        elif (timestamp - pending_entry_time) < config.ocr_entry_debounce_seconds:
+                            should_submit = False
+                        else:
+                            should_submit = (timestamp - last_submitted_time) >= _OCR_SUBMISSION_DEBOUNCE_SECONDS
+                    else:
+                        should_submit = (timestamp - last_submitted_time) >= _OCR_SUBMISSION_DEBOUNCE_SECONDS
                 checkpoints.append(
                     Checkpoint(
                         index=sample_index,
@@ -230,12 +245,14 @@ def _collect_checkpoints(
                     stats.submitted_ocr_frames += 1
                     if on_candidate is None:
                         raise RuntimeError("Changed frame candidate callback was not provided.")
-                    ocr_frame, _ = _prepare_roi_frame(roi_frame, config.resize_max_width)
-                    on_candidate(sample_index, ocr_frame)
+                    on_candidate(sample_index, prepared_roi_frame)
                     last_submitted_gray = gray
                     last_submitted_time = timestamp
+                    pending_entry_time = None
                 else:
                     stats.reused_frames += 1
+                    if not changed or not distinct_vs_last_submitted:
+                        pending_entry_time = None
                 sample_index += 1
                 last_gray = gray
 
@@ -246,7 +263,7 @@ def _collect_checkpoints(
     return checkpoints, stats
 
 
-def _prepare_roi_gray(roi_frame: "np.ndarray | object", resize_max_width: int):
+def _resize_roi_frame(roi_frame: "np.ndarray | object", resize_max_width: int):
     import cv2
 
     if not hasattr(roi_frame, "shape"):
@@ -259,23 +276,17 @@ def _prepare_roi_gray(roi_frame: "np.ndarray | object", resize_max_width: int):
     if width > resize_max_width:
         scale = resize_max_width / width
         roi_frame = cv2.resize(roi_frame, (resize_max_width, max(1, int(round(height * scale)))))
-    gray = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2GRAY)
-    return cv2.GaussianBlur(gray, (5, 5), 0)
+    return roi_frame
 
 
-def _prepare_roi_frame(roi_frame: "np.ndarray", resize_max_width: int) -> tuple["np.ndarray", "np.ndarray"]:
+def _prepare_roi_gray(roi_frame: "np.ndarray | object", resize_max_width: int):
     import cv2
 
-    if roi_frame.size == 0:
-        raise RuntimeError("Computed ROI is empty. Check --roi values.")
-
-    height, width = roi_frame.shape[:2]
-    if width > resize_max_width:
-        scale = resize_max_width / width
-        roi_frame = cv2.resize(roi_frame, (resize_max_width, max(1, int(round(height * scale)))))
+    del resize_max_width
+    if not hasattr(roi_frame, "shape"):
+        return roi_frame
     gray = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2GRAY)
-    gray = cv2.GaussianBlur(gray, (5, 5), 0)
-    return roi_frame, gray
+    return cv2.GaussianBlur(gray, (5, 5), 0)
 
 
 def _is_visually_similar(previous: "np.ndarray | None", current: "np.ndarray", diff_threshold: float) -> bool:

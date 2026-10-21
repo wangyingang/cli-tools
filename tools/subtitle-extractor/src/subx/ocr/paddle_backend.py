@@ -5,14 +5,16 @@ import os
 import warnings
 from collections.abc import Mapping
 from contextlib import redirect_stderr, redirect_stdout
-from pathlib import Path
 
 from .base import OCRBackend
+from .paddle_models import (
+    PP_OCR_V5_SERVER_DET_REPO,
+    PP_OCR_V5_SERVER_REC_REPO,
+    download_model_snapshot,
+    ensure_huggingface_hub_cache,
+)
 from ..text import normalize_text
 from ..types import OCRText
-
-PP_OCR_V5_SERVER_DET_REPO = "PaddlePaddle/PP-OCRv5_server_det"
-PP_OCR_V5_SERVER_REC_REPO = "PaddlePaddle/PP-OCRv5_server_rec"
 
 
 class PaddleBackend(OCRBackend):
@@ -20,9 +22,9 @@ class PaddleBackend(OCRBackend):
 
     def __init__(self, lang: str) -> None:
         os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
-        cache_dir = _ensure_huggingface_hub_cache()
-        det_dir = _download_model_snapshot(PP_OCR_V5_SERVER_DET_REPO, cache_dir=cache_dir)
-        rec_dir = _download_model_snapshot(PP_OCR_V5_SERVER_REC_REPO, cache_dir=cache_dir)
+        cache_dir = ensure_huggingface_hub_cache()
+        det_dir = download_model_snapshot(PP_OCR_V5_SERVER_DET_REPO, cache_dir=cache_dir)
+        rec_dir = download_model_snapshot(PP_OCR_V5_SERVER_REC_REPO, cache_dir=cache_dir)
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
@@ -78,20 +80,3 @@ def _extract_payload(prediction) -> Mapping[str, object]:
         if isinstance(value, Mapping):
             return value.get("res", value)
     return {}
-
-
-def _download_model_snapshot(repo_id: str, *, cache_dir: str) -> Path:
-    from huggingface_hub import snapshot_download
-
-    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-        return Path(snapshot_download(repo_id=repo_id, cache_dir=cache_dir))
-
-
-def _ensure_huggingface_hub_cache() -> str:
-    cache_home = os.environ.get("XDG_CACHE_HOME")
-    if cache_home:
-        hub_cache = Path(cache_home) / "huggingface" / "hub"
-    else:
-        hub_cache = Path.home() / ".cache" / "huggingface" / "hub"
-    os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(hub_cache))
-    return os.environ["HUGGINGFACE_HUB_CACHE"]

@@ -19,6 +19,29 @@ def parse_roi(value: str | None) -> ROI:
     return ROI(x=x, y=y, width=width, height=height)
 
 
+def build_centered_bottom_roi(width: float, height: float, bottom_offset: float = 0.0) -> ROI:
+    x = (1.0 - width) / 2.0
+    y = 1.0 - bottom_offset - height
+    return ROI(x=x, y=y, width=width, height=height)
+
+
+def build_centered_bottom_roi_for_prepared_height(
+    *,
+    frame_width: int,
+    frame_height: int,
+    width: float,
+    prepared_height_px: float,
+    bottom_offset: float = 0.0,
+    resize_max_width: int = 1280,
+) -> ROI:
+    cropped_width_px = frame_width * width
+    scale = 1.0
+    if cropped_width_px > resize_max_width:
+        scale = resize_max_width / cropped_width_px
+    height = prepared_height_px / max(frame_height * scale, 1.0)
+    return build_centered_bottom_roi(width=width, height=height, bottom_offset=bottom_offset)
+
+
 def crop_frame(frame, roi: ROI):
     frame_height, frame_width = frame.shape[:2]
     left, top, right, bottom = roi.crop_bounds(frame_width, frame_height)

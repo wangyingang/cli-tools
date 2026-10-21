@@ -423,9 +423,9 @@ class PipelineTests(unittest.TestCase):
             del resize_max_width
             return f"gray-{id(roi_frame)}"
 
-        def fake_prepare_roi_frame(roi_frame, resize_max_width):
+        def fake_resize_roi_frame(roi_frame, resize_max_width):
             del resize_max_width
-            return roi_frame, f"gray-{id(roi_frame)}"
+            return roi_frame
 
         def fake_visually_similar(previous, current, diff_threshold):
             score = fake_similarity_score(previous, current)
@@ -438,7 +438,7 @@ class PipelineTests(unittest.TestCase):
         with patch("cv2.VideoCapture", return_value=fake_capture):
             with patch("subx.pipeline.crop_frame", side_effect=fake_crop_frame):
                 with patch("subx.pipeline._prepare_roi_gray", side_effect=fake_prepare_roi_gray):
-                    with patch("subx.pipeline._prepare_roi_frame", side_effect=fake_prepare_roi_frame):
+                    with patch("subx.pipeline._resize_roi_frame", side_effect=fake_resize_roi_frame):
                         with patch("subx.pipeline._is_visually_similar", side_effect=fake_visually_similar):
                             with patch("subx.pipeline._candidate_similarity_score", side_effect=fake_similarity_score, create=True) as similarity_score:
                                 checkpoints, stats = _collect_checkpoints(
@@ -476,9 +476,9 @@ class PipelineTests(unittest.TestCase):
             del resize_max_width
             return f"gray-{id(roi_frame)}"
 
-        def fake_prepare_roi_frame(roi_frame, resize_max_width):
+        def fake_resize_roi_frame(roi_frame, resize_max_width):
             del resize_max_width
-            return roi_frame, f"gray-{id(roi_frame)}"
+            return roi_frame
 
         def fake_visually_similar(previous, current, diff_threshold):
             score = fake_similarity_score(previous, current)
@@ -491,7 +491,7 @@ class PipelineTests(unittest.TestCase):
         with patch("cv2.VideoCapture", return_value=fake_capture):
             with patch("subx.pipeline.crop_frame", side_effect=fake_crop_frame):
                 with patch("subx.pipeline._prepare_roi_gray", side_effect=fake_prepare_roi_gray):
-                    with patch("subx.pipeline._prepare_roi_frame", side_effect=fake_prepare_roi_frame):
+                    with patch("subx.pipeline._resize_roi_frame", side_effect=fake_resize_roi_frame):
                         with patch("subx.pipeline._is_visually_similar", side_effect=fake_visually_similar):
                             with patch("subx.pipeline._candidate_similarity_score", side_effect=fake_similarity_score, create=True) as similarity_score:
                                 checkpoints, stats = _collect_checkpoints(
@@ -526,9 +526,9 @@ class PipelineTests(unittest.TestCase):
             del resize_max_width
             return f"gray-{roi_frame}"
 
-        def fake_prepare_roi_frame(roi_frame, resize_max_width):
+        def fake_resize_roi_frame(roi_frame, resize_max_width):
             del resize_max_width
-            return roi_frame, f"gray-{roi_frame}"
+            return roi_frame
 
         def fake_visually_similar(previous, current, diff_threshold):
             del previous, current, diff_threshold
@@ -541,7 +541,7 @@ class PipelineTests(unittest.TestCase):
         with patch("cv2.VideoCapture", return_value=fake_capture):
             with patch("subx.pipeline.crop_frame", side_effect=fake_crop_frame):
                 with patch("subx.pipeline._prepare_roi_gray", side_effect=fake_prepare_roi_gray):
-                    with patch("subx.pipeline._prepare_roi_frame", side_effect=fake_prepare_roi_frame):
+                    with patch("subx.pipeline._resize_roi_frame", side_effect=fake_resize_roi_frame):
                         with patch("subx.pipeline._is_visually_similar", side_effect=fake_visually_similar):
                             with patch("subx.pipeline._candidate_similarity_score", side_effect=fake_similarity_score, create=True):
                                 checkpoints, stats = _collect_checkpoints(
@@ -556,6 +556,97 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(on_candidate_calls[0][0], 0)
         self.assertEqual(stats.submitted_ocr_frames, len(on_candidate_calls))
         self.assertEqual(len([checkpoint for checkpoint in checkpoints if checkpoint.frame_changed]), len(on_candidate_calls))
+
+    def test_collect_checkpoints_default_debounce_keeps_only_spaced_candidates(self) -> None:
+        config = ExtractConfig(
+            video_path=Path("clip.mp4"),
+            output_path=Path("clip.srt"),
+            workers=1,
+            max_pending_ocr_frames=2,
+        )
+        fake_capture = self._FakeVideoCapture(list(range(19)))
+        on_candidate_calls: list[tuple[int, object]] = []
+        visually_similar_flags = [False] * 6
+
+        def fake_crop_frame(frame, roi):
+            del roi
+            return frame
+
+        def fake_prepare_roi_gray(roi_frame, resize_max_width):
+            del resize_max_width
+            return f"gray-{roi_frame}"
+
+        def fake_resize_roi_frame(roi_frame, resize_max_width):
+            del resize_max_width
+            return roi_frame
+
+        def fake_visually_similar(previous, current, diff_threshold):
+            del previous, current, diff_threshold
+            return visually_similar_flags.pop(0)
+
+        def fake_similarity_score(previous, current):
+            del previous, current
+            return 0.0
+
+        with patch("cv2.VideoCapture", return_value=fake_capture):
+            with patch("subx.pipeline.crop_frame", side_effect=fake_crop_frame):
+                with patch("subx.pipeline._prepare_roi_gray", side_effect=fake_prepare_roi_gray):
+                    with patch("subx.pipeline._resize_roi_frame", side_effect=fake_resize_roi_frame):
+                        with patch("subx.pipeline._is_visually_similar", side_effect=fake_visually_similar):
+                            with patch("subx.pipeline._candidate_similarity_score", side_effect=fake_similarity_score, create=True):
+                                _collect_checkpoints(
+                                    config,
+                                    on_candidate=lambda index, image: on_candidate_calls.append((index, image)),
+                                    progress_reporter=None,
+                                )
+
+        self.assertEqual([index for index, _image in on_candidate_calls], [0, 2, 4, 6])
+
+    def test_collect_checkpoints_entry_debounce_delays_first_distinct_candidate_in_changed_run(self) -> None:
+        config = ExtractConfig(
+            video_path=Path("clip.mp4"),
+            output_path=Path("clip.srt"),
+            workers=1,
+            max_pending_ocr_frames=2,
+            ocr_entry_debounce_seconds=0.225,
+        )
+        fake_capture = self._FakeVideoCapture(list(range(19)))
+        on_candidate_calls: list[tuple[int, object]] = []
+        visually_similar_flags = [False] * 6
+
+        def fake_crop_frame(frame, roi):
+            del roi
+            return frame
+
+        def fake_prepare_roi_gray(roi_frame, resize_max_width):
+            del resize_max_width
+            return f"gray-{roi_frame}"
+
+        def fake_resize_roi_frame(roi_frame, resize_max_width):
+            del resize_max_width
+            return roi_frame
+
+        def fake_visually_similar(previous, current, diff_threshold):
+            del previous, current, diff_threshold
+            return visually_similar_flags.pop(0)
+
+        def fake_similarity_score(previous, current):
+            del previous, current
+            return 0.0
+
+        with patch("cv2.VideoCapture", return_value=fake_capture):
+            with patch("subx.pipeline.crop_frame", side_effect=fake_crop_frame):
+                with patch("subx.pipeline._prepare_roi_gray", side_effect=fake_prepare_roi_gray):
+                    with patch("subx.pipeline._resize_roi_frame", side_effect=fake_resize_roi_frame):
+                        with patch("subx.pipeline._is_visually_similar", side_effect=fake_visually_similar):
+                            with patch("subx.pipeline._candidate_similarity_score", side_effect=fake_similarity_score, create=True):
+                                _collect_checkpoints(
+                                    config,
+                                    on_candidate=lambda index, image: on_candidate_calls.append((index, image)),
+                                    progress_reporter=None,
+                                )
+
+        self.assertEqual([index for index, _image in on_candidate_calls], [0, 3, 6])
 
     def test_collect_checkpoints_keeps_later_distinct_change_after_gap(self) -> None:
         config = ExtractConfig(
@@ -576,9 +667,9 @@ class PipelineTests(unittest.TestCase):
             del resize_max_width
             return f"gray-{roi_frame}"
 
-        def fake_prepare_roi_frame(roi_frame, resize_max_width):
+        def fake_resize_roi_frame(roi_frame, resize_max_width):
             del resize_max_width
-            return roi_frame, f"gray-{roi_frame}"
+            return roi_frame
 
         def fake_visually_similar(previous, current, diff_threshold):
             del previous, current, diff_threshold
@@ -591,7 +682,7 @@ class PipelineTests(unittest.TestCase):
         with patch("cv2.VideoCapture", return_value=fake_capture):
             with patch("subx.pipeline.crop_frame", side_effect=fake_crop_frame):
                 with patch("subx.pipeline._prepare_roi_gray", side_effect=fake_prepare_roi_gray):
-                    with patch("subx.pipeline._prepare_roi_frame", side_effect=fake_prepare_roi_frame):
+                    with patch("subx.pipeline._resize_roi_frame", side_effect=fake_resize_roi_frame):
                         with patch("subx.pipeline._is_visually_similar", side_effect=fake_visually_similar):
                             with patch("subx.pipeline._candidate_similarity_score", side_effect=fake_similarity_score, create=True):
                                 checkpoints, stats = _collect_checkpoints(
@@ -608,7 +699,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(stats.submitted_ocr_frames, len(call_indices))
         self.assertEqual(len([checkpoint for checkpoint in checkpoints if checkpoint.frame_changed]), len(call_indices))
 
-    def test_collect_checkpoints_skips_ocr_frame_prep_for_reused_candidates(self) -> None:
+    def test_collect_checkpoints_reuses_prepared_sampled_frame_for_submitted_candidates(self) -> None:
         config = ExtractConfig(
             video_path=Path("clip.mp4"),
             output_path=Path("clip.srt"),
@@ -630,10 +721,10 @@ class PipelineTests(unittest.TestCase):
             del resize_max_width
             return f"gray-{roi_frame}"
 
-        def fake_prepare_roi_frame(roi_frame, resize_max_width):
+        def fake_resize_roi_frame(roi_frame, resize_max_width):
             del resize_max_width
             prepare_calls.append(roi_frame)
-            return f"ocr-{len(prepare_calls)}", f"gray-{len(prepare_calls)}"
+            return f"ocr-{len(prepare_calls)}"
 
         def fake_visually_similar(previous, current, diff_threshold):
             del previous, current, diff_threshold
@@ -652,7 +743,7 @@ class PipelineTests(unittest.TestCase):
         with patch("cv2.VideoCapture", return_value=fake_capture):
             with patch("subx.pipeline.crop_frame", side_effect=fake_crop_frame):
                 with patch("subx.pipeline._prepare_roi_gray", side_effect=fake_prepare_roi_gray):
-                    with patch("subx.pipeline._prepare_roi_frame", side_effect=fake_prepare_roi_frame):
+                    with patch("subx.pipeline._resize_roi_frame", side_effect=fake_resize_roi_frame):
                         with patch("subx.pipeline._is_visually_similar", side_effect=fake_visually_similar):
                             with patch("subx.pipeline._candidate_similarity_score", side_effect=fake_similarity_score, create=True):
                                 with patch("subx.pipeline.create_backend", return_value=FakeBackend()):
@@ -665,7 +756,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(stats.sampled_frames, 2)
         self.assertEqual(stats.submitted_ocr_frames, 1)
         self.assertEqual(stats.reused_frames, 1)
-        self.assertEqual(prepare_calls, [frame_a])
+        self.assertEqual(prepare_calls, [frame_a, frame_b])
         self.assertEqual(on_candidate_calls, [(0, "ocr-1")])
         self.assertEqual([checkpoint.frame_changed for checkpoint in checkpoints], [True, False])
 
@@ -677,7 +768,7 @@ class PipelineTests(unittest.TestCase):
             workers=1,
             max_pending_ocr_frames=2,
         )
-        fake_capture = self._GrabRetrieveVideoCapture(["frame-0", "frame-1", "frame-2", "frame-3", "frame-4"], fps=10.0)
+        fake_capture = self._GrabRetrieveVideoCapture(["frame-0", "frame-1", "frame-2", "frame-3", "frame-4"], fps=8.0)
         on_candidate_calls: list[tuple[int, object]] = []
         prepare_calls: list[object] = []
 
@@ -685,10 +776,10 @@ class PipelineTests(unittest.TestCase):
             del roi
             return frame
 
-        def fake_prepare_roi_frame(roi_frame, resize_max_width):
+        def fake_resize_roi_frame(roi_frame, resize_max_width):
             del resize_max_width
             prepare_calls.append(roi_frame)
-            return f"ocr-{roi_frame}", f"gray-{roi_frame}"
+            return f"ocr-{roi_frame}"
 
         def fake_visually_similar(previous, current, diff_threshold):
             del previous, current, diff_threshold
@@ -704,7 +795,7 @@ class PipelineTests(unittest.TestCase):
 
         with patch("cv2.VideoCapture", return_value=fake_capture):
             with patch("subx.pipeline.crop_frame", side_effect=fake_crop_frame):
-                with patch("subx.pipeline._prepare_roi_frame", side_effect=fake_prepare_roi_frame):
+                with patch("subx.pipeline._resize_roi_frame", side_effect=fake_resize_roi_frame):
                     with patch("subx.pipeline._is_visually_similar", side_effect=fake_visually_similar):
                         with patch("subx.pipeline._candidate_similarity_score", side_effect=fake_similarity_score, create=True):
                             with patch("subx.pipeline.create_backend", return_value=FakeBackend()):
@@ -724,7 +815,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(stats.submitted_ocr_frames, 3)
         self.assertEqual(stats.reused_frames, 0)
         self.assertEqual([checkpoint.frame_changed for checkpoint in checkpoints], [True, True, True])
-        self.assertEqual([checkpoint.time_seconds for checkpoint in checkpoints], [0.0, 0.2, 0.4])
+        self.assertEqual([checkpoint.time_seconds for checkpoint in checkpoints], [0.0, 0.25, 0.5])
 
     def test_collect_checkpoints_samples_final_frame_even_when_off_interval(self) -> None:
         config = ExtractConfig(
@@ -745,9 +836,9 @@ class PipelineTests(unittest.TestCase):
             del resize_max_width
             return f"gray-{roi_frame}"
 
-        def fake_prepare_roi_frame(roi_frame, resize_max_width):
+        def fake_resize_roi_frame(roi_frame, resize_max_width):
             del resize_max_width
-            return f"ocr-{roi_frame}", f"gray-{roi_frame}"
+            return f"ocr-{roi_frame}"
 
         def fake_visually_similar(previous, current, diff_threshold):
             del previous, current, diff_threshold
@@ -764,7 +855,7 @@ class PipelineTests(unittest.TestCase):
         with patch("cv2.VideoCapture", return_value=fake_capture):
             with patch("subx.pipeline.crop_frame", side_effect=fake_crop_frame):
                 with patch("subx.pipeline._prepare_roi_gray", side_effect=fake_prepare_roi_gray):
-                    with patch("subx.pipeline._prepare_roi_frame", side_effect=fake_prepare_roi_frame):
+                    with patch("subx.pipeline._resize_roi_frame", side_effect=fake_resize_roi_frame):
                         with patch("subx.pipeline._is_visually_similar", side_effect=fake_visually_similar):
                             with patch("subx.pipeline._candidate_similarity_score", side_effect=fake_similarity_score, create=True):
                                 with patch("subx.pipeline.create_backend", return_value=FakeBackend()):
@@ -817,6 +908,16 @@ class PipelineTests(unittest.TestCase):
                     extract_subtitles(config)
 
         self.assertNotIn("OCR (", stderr.getvalue())
+
+    def test_extract_subtitles_rejects_negative_entry_debounce(self) -> None:
+        config = ExtractConfig(
+            video_path=Path("clip.mp4"),
+            output_path=Path("clip.srt"),
+            ocr_entry_debounce_seconds=-0.1,
+        )
+
+        with self.assertRaises(ValueError):
+            extract_subtitles(config)
 
 if __name__ == "__main__":
     unittest.main()

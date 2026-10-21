@@ -21,7 +21,7 @@ def build_parser() -> argparse.ArgumentParser:
     eval_parser.add_argument("--engine", choices=["paddle", "onnx", "all"], default="paddle")
     eval_parser.add_argument("--default-roi", default="0,0.8,1,0.2")
     eval_parser.add_argument("--sample-every", type=int, default=3)
-    eval_parser.add_argument("--workers", type=int, default=4)
+    eval_parser.add_argument("--workers", type=int, default=6)
     eval_parser.add_argument("--report")
     eval_parser.add_argument("--json")
     eval_parser.set_defaults(handler=_handle_eval)
@@ -31,7 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("--engine", choices=["paddle", "onnx", "all"], default="paddle")
     bench.add_argument("--default-roi", default="0,0.8,1,0.2")
     bench.add_argument("--sample-every", type=int, default=3)
-    bench.add_argument("--workers", type=int, default=4)
+    bench.add_argument("--workers", type=int, default=6)
     bench.add_argument("--json")
     bench.set_defaults(handler=_handle_bench)
 

@@ -18,6 +18,8 @@
 
 - 这是一个 `src` 布局的 Python CLI 项目，目标运行时是 Python `3.12.x`。
 - 主默认 OCR backend 是 PaddleOCR，目标模型配置是 `PP-OCRv5_server_det + PP-OCRv5_server_rec`。
+- 当前默认 ROI 为 `0,0.8,1,0.2`；若特定视频的字幕稳定位于底部居中的非全宽区域，可显式传更窄的 `--roi` 做受控提速。
+- `subx` 当前也支持 `--subtitle-lines single|double` 与 `--roi-width/--roi-height/--roi-bottom-offset`；其中 `--subtitle-lines` 会按视频尺寸和 `1280` 宽上限反推 ROI 高度。
 - ONNX 候选 backend 通过 `rapidocr-onnxruntime` 加载 Hugging Face 上的 `monkt/paddleocr-onnx` 模型文件。
 - 视频处理主线是：顺序解码 -> ROI 裁剪 -> 图像差分筛候选帧 -> OCR 工作池 -> 文本去重与时间补偿 -> `.srt` 输出。
 - `eval`/`bench` 共享同一套提取流水线，只是在输出侧分别做准确率评估和性能统计。
