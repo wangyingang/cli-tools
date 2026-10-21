@@ -1,0 +1,81 @@
+[
+  {
+    "sample_id": "en_double_bright",
+    "engine": "paddle",
+    "lang": "en",
+    "roi": [
+      0.0,
+      0.8,
+      1.0,
+      0.2
+    ],
+    "cer": 0.06,
+    "wer": 0.21212121212121213,
+    "cue_exact_match": 0.0,
+    "overlap_hit_rate": 1.0,
+    "mean_start_error": 0.06887500000000009,
+    "mean_end_error": 0.08687499999999944,
+    "total_elapsed_seconds": 10.21977737499401,
+    "ocr_calls": 7,
+    "sampled_frames": 144,
+    "tags": [
+      "double-line",
+      "dark-text-light-bg",
+      "bottom-centered",
+      "non-full-width"
+    ]
+  },
+  {
+    "sample_id": "mixed_double_dark",
+    "engine": "paddle",
+    "lang": "mixed",
+    "roi": [
+      0.0,
+      0.8,
+      1.0,
+      0.2
+    ],
+    "cer": 0.008849557522123894,
+    "wer": 0.15789473684210525,
+    "cue_exact_match": 0.3333333333333333,
+    "overlap_hit_rate": 1.0,
+    "mean_start_error": 0.09389999999999969,
+    "mean_end_error": 0.01180000000000033,
+    "total_elapsed_seconds": 39.52988550000009,
+    "ocr_calls": 94,
+    "sampled_frames": 180,
+    "tags": [
+      "bilingual",
+      "double-line",
+      "light-text-dark-bg",
+      "bottom-centered",
+      "non-full-width"
+    ]
+  },
+  {
+    "sample_id": "zh_single_dark",
+    "engine": "paddle",
+    "lang": "zh",
+    "roi": [
+      0.0,
+      0.8,
+      1.0,
+      0.2
+    ],
+    "cer": 0.0,
+    "wer": 0.0,
+    "cue_exact_match": 1.0,
+    "overlap_hit_rate": 1.0,
+    "mean_start_error": 0.09389999999999969,
+    "mean_end_error": 0.01180000000000033,
+    "total_elapsed_seconds": 28.197808208002243,
+    "ocr_calls": 83,
+    "sampled_frames": 180,
+    "tags": [
+      "single-line",
+      "light-text-dark-bg",
+      "bottom-centered",
+      "non-full-width"
+    ]
+  }
+]

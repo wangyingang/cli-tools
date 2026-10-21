@@ -1,0 +1,14 @@
+1
+00:00:00,200 --> 00:00:05,800
+Clouds drift over the blue edge
+of Earth below the station
+
+2
+00:00:06,200 --> 00:00:11,800
+The subtitle stays centered
+instead of spanning the full width
+
+3
+00:00:12,200 --> 00:00:17,800
+Dark text on a bright field
+gives the OCR a different target
