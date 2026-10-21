@@ -1,4 +1,4 @@
-BIN_NAME := avcut
+BIN_NAME := videocut
 TARGET_BIN := $(HOME)/.local/bin/$(BIN_NAME)
 
 .PHONY: fmt test check install-local

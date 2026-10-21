@@ -1,6 +1,6 @@
-# avcut
+# videocut
 
-`avcut` cuts a video and keeps a sidecar subtitle synchronized with the new
+`videocut` cuts a video and keeps a sidecar subtitle synchronized with the new
 timeline. It uses the installed `ffmpeg` and `ffprobe` commands.
 
 ## Install
@@ -9,12 +9,12 @@ timeline. It uses the installed `ffmpeg` and `ffprobe` commands.
 make install-local
 ```
 
-The binary is installed at `~/.local/bin/avcut`.
+The binary is installed at `~/.local/bin/videocut`.
 
 ## Usage
 
 ```bash
-avcut <video> \
+videocut <video> \
   [-b|--start <hh:mm:ss>] \
   [-e|--end <hh:mm:ss>] \
   [-s|--subtitle <path>] \
@@ -29,22 +29,22 @@ avcut <video> \
 to the end of the video. Times must use `hh:mm:ss`; minutes and seconds must be
 between `00` and `59`.
 
-By default, `avcut` copies the original video and audio streams without
+By default, `videocut` copies the original video and audio streams without
 re-encoding. It aligns outward so content is not lost: the start moves to the
 previous video keyframe and the end moves to the next video keyframe. If either
 boundary moves by more than five seconds, the command exits before writing and
 asks for `--encode`. Use `--encode` to cut at the requested times by re-encoding
 video as H.264 and audio as AAC.
 
-When `--subtitle` is omitted, `avcut` searches beside the video for an exact
+When `--subtitle` is omitted, `videocut` searches beside the video for an exact
 same-stem subtitle in this order: `.srt`, `.vtt`, `.ass`, `.ssa`. If no match is
 found, it cuts only the video. Subtitle cues are clipped to the actual aligned
 video interval and shifted by the actual video start, not the requested start.
 
 ```bash
-avcut ./movie.mp4 -b 00:01:30 -e 00:03:00 -o ./clip.mp4
-avcut ./movie.mp4 -b 00:01:30 -s ./captions.srt --dry-run
-avcut ./movie.mp4 -b 00:01:30 -e 00:03:00 --encode
+videocut ./movie.mp4 -b 00:01:30 -e 00:03:00 -o ./clip.mp4
+videocut ./movie.mp4 -b 00:01:30 -s ./captions.srt --dry-run
+videocut ./movie.mp4 -b 00:01:30 -e 00:03:00 --encode
 ```
 
 By default, output files are written beside the input and named from the actual

@@ -20,7 +20,7 @@ const MAX_ALIGNMENT_ERROR_SECONDS: f64 = 5.0;
 
 #[derive(Parser)]
 #[command(
-    name = "avcut",
+    name = "videocut",
     version,
     about = "Cut video at outward-aligned keyframes and keep sidecar subtitles synchronized"
 )]
@@ -544,7 +544,7 @@ mod tests {
     #[test]
     fn parses_short_options() {
         let cli = Cli::try_parse_from([
-            "avcut",
+            "videocut",
             "input.mp4",
             "-b",
             "00:00:05",
